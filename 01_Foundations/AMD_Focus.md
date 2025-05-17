@@ -256,3 +256,90 @@ Each SM contains:
 - **New Transformer Engine for optimized LLM inference/training**
 
 ---
+
+# AMD GPU Architecture – In-Depth Analysis
+
+AMD takes a somewhat different approach to GPU design with their RDNA (gaming) and CDNA (compute) architectures. This document focuses on CDNA-style, data-center GPUs (e.g., MI300).
+
+---
+
+## Core Components
+
+### Compute Units (CUs)
+The Compute Unit is AMD’s equivalent to NVIDIA’s Streaming Multiprocessor (SM). Each CU contains:
+- **4 SIMD units** (each with 16 ALUs/stream processors → 64 total per CU)
+- **Wavefront Scheduler**
+- **Local Data Share (LDS)** memory
+- **Scalar & vector registers**
+- **L0 instruction cache** & **L1 data cache**
+
+### Stream Processors
+AMD’s basic ALUs, equivalent to NVIDIA’s CUDA cores:
+- Organized into **16-wide SIMD units** (vector cores)
+- Newer designs also include **Matrix Cores** (AI accelerators) for GEMM
+- Executes floating-point and integer instructions
+- **64 stream processors per CU** in modern designs (4 SIMD × 16 lanes)
+
+---
+
+## Memory Architecture
+
+- **Infinity Cache** (up to 256 MB L3)  
+  Reduces VRAM access, benefits long-context LLMs, KV cache reuse, and multi-GPU setups  
+- **High-Bandwidth Memory (HBM3)**  
+  Used in data-center GPUs for massive bandwidth  
+- **GDDR6**  
+  Used in consumer graphics cards  
+- **Smart Access Memory**  
+  Allows CPU direct access to GPU memory
+
+---
+
+## Parallel Execution Model
+
+### SIMD Implementation
+- **SIMD units** = groups of 16 ALUs executing one instruction on multiple data elements  
+- AMD exposes explicit SIMD control, whereas NVIDIA hides it under SIMT
+
+### SIMT via Wavefronts
+- AMD groups threads into **64-thread wavefronts** (vs. NVIDIA’s 32-thread warps)  
+- All threads in a wavefront execute the same instruction in lockstep, with independent state  
+- **Larger wavefronts** improve throughput on uniform workloads but penalize divergence  
+- A single wavefront runs on one SIMD unit over **4 cycles** (16 lanes × 4)
+
+### CU-Level Parallelism
+- Each CU has **4 SIMD units**, so it can execute **4 wavefronts in parallel**  
+- **Example**: 256 threads = 4 wavefronts → each SIMD unit handles one wavefront → after 4 cycles all 256 threads complete
+
+---
+
+## AMD MI300 Example
+
+- **Compute Units:** 228  
+- **Stream Processors:** 14,592  
+- **Infinity Cache:** 256 MB  
+- **Memory:** 128 GB HBM3  
+- Mixed-precision compute optimized for AI/ML  
+
+---
+
+## Comparison: AMD vs NVIDIA (256 threads)
+
+| Feature                     | AMD (CU)                         | NVIDIA (SM)                      |
+|-----------------------------|----------------------------------|----------------------------------|
+| Thread group size           | 64 threads (wavefront)           | 32 threads (warp)                |
+| SIMD lane width             | 16                               | 32                               |
+| Threads per SIMD per cycle  | 16                               | 32                               |
+| Cycles to finish one group  | 4 (wavefront)                    | 1 (warp)                         |
+| Parallel units per block    | 4 SIMD units per CU              | Multiple warp schedulers per SM  |
+| Cycles for 256 threads      | 4                                | 2                                |
+| Scheduling granularity      | Wavefront                        | Warp                             |
+
+---
+
+## Performance Notes
+
+- **AMD**’s larger wavefronts and SIMD model excel on highly uniform, predictable workloads (e.g., large matrix multiplies in LLMs).  
+- **NVIDIA**’s SIMT/warp model finishes each group faster, offers finer-grained divergence handling, and better latency hiding for mixed or irregular workloads.
+
+
