@@ -93,23 +93,166 @@ Decoding CPU vs. GPU: A Detailed Exploration of NVIDIA and AMD GPU Architectures
 
 ---
 
-## Example: Matrix Multiplication on GPU
+## Example: Matrix Multiplication
 
-    When I want to multiply two matrices (say A[1024×1024] × B[1024×1024]),
-    I write a kernel that describes how to compute one element of the output matrix C.
+When I want to multiply two matrices (say A[1024×1024] × B[1024×1024]):
 
-    At runtime, the GPU launches one thread per output element (or per tile), meaning 1024×1024 = ~1 million threads. each output element (C[i][j]) is computed by one SIMT thread.
+- I write a **kernel** that describes how to compute one element of the output matrix C.
+- At runtime, the GPU launches **one thread per output element** (or per tile), meaning 1024×1024 = ~1 million threads.
+- Each output element `C[i][j]` is computed by one **SIMT thread**.
+- These threads are grouped into **warps of 32**.
+- Each warp is scheduled onto a **Streaming Multiprocessor (SM)**.
 
-    These threads are grouped into warps of 32. Each warp is scheduled onto an SM.
+Inside the SM:
+- The same kernel instruction is executed across threads via **SIMD hardware**, each using its own piece of input data.
+- This model is called **SIMT (Single Instruction, Multiple Threads)** — built on top of **SIMD (Single Instruction, Multiple Data)**.
 
-    Inside the SM, the same kernel instruction is executed across threads via SIMD hardware, each using its own piece of input data.
+### Key Concepts:
+- **SIMT** is the programming model: one thread per output value, written like it's independent.
+- **SIMD** is how the GPU really runs it: one instruction across 32 values at once.
+- Each thread is assigned to **one SIMD lane (FP32 ALU)** during that instruction.
+- All threads in a warp **share the SIMD unit**, executing in **lockstep**.
 
-    This model is called SIMT — Single Instruction, Multiple Threads — which sits on top of SIMD — Single Instruction, Multiple Data.
+This represents a **50–100× speedup** over CPU execution, showing why GPUs are essential for deep learning and scientific computing.
 
-    SIMT is the programming model: one thread per output value, written like it's independent.
-    SIMD is how the GPU really runs it: one instruction across 32 values at once.
+---
 
-    Each thread is assigned to one SIMD lane (One FP32 ALU — handles one thread’s instruction) during that instruction
-    All threads in a warp share the SIMD unit (A group of FP32 ALUs that runs 1 instruction on many data), executing in lockstep
+## How Execution Works (Simplified)
 
-This represents a 50–100 × speedup for the GPU, demonstrating why GPUs have become essential for deep learning and scientific computing than CPUs - which process sequentially.
+### You (the programmer) write:
+- A kernel: the math to compute one result (e.g., one element in matrix C)
+- You launch **many threads**: each does one piece of work
+
+### GPU groups threads into **warps**:
+- Every 32 threads = 1 warp (NVIDIA standard)
+- Warps are scheduled **together**, not one thread at a time
+
+### Each **SM (Streaming Multiprocessor)**:
+- Handles **multiple warps at once**
+- Has **SIMD lanes (FP32 ALUs / CUDA cores)** that run **one instruction across all threads in a warp** (this part is handled by hardware, not the programmer)
+
+---
+
+# NVIDIA GPU Architecture — An In-Depth Analysis
+
+![Typical Nvidia GPU architecture](nvidia_arch.png)
+
+### 1. Streaming Multiprocessor (SM)
+
+The SM is the fundamental building block of NVIDIA GPUs, similar to a “core complex” in CPU terminology. Each modern NVIDIA GPU contains dozens to hundreds of SMs.
+
+Each SM contains:
+- CUDA cores (64–128 per SM in modern architectures)
+- Tensor cores (specialized for AI computation)
+- Warp schedulers and dispatch units
+- Register files (local memory)
+- Shared memory/L1 cache
+- Special Function Units (SFUs) for transcendental operations
+
+---
+
+### 2. CUDA Cores
+
+CUDA cores are the basic computational units that handle **standard floating-point and integer calculations**.
+
+Modern NVIDIA GPUs contain thousands of CUDA cores (e.g., **RTX 4090 has 16,384**).
+
+Each CUDA core can perform:
+- Floating-point addition or multiplication per clock
+- Integer operations
+- Logic operations (AND, OR, XOR)
+
+---
+
+### 3. Tensor Cores
+
+Introduced with the **Volta architecture**, Tensor Cores are specialized hardware accelerators for matrix operations used in deep learning:
+
+- Matrix-multiply-accumulate operations
+- Mixed precision computation (FP16, FP8, INT8)
+- **2–8× faster** than traditional CUDA cores for AI workloads
+
+For example:
+> A single **4th generation Tensor Core** in Hopper can perform **1,024 floating-point operations per clock cycle**.
+
+**Note:** CUDA cores and Tensor Cores are **separate physical hardware units** within the SM.
+
+#### Comparison Table
+
+| Feature        | **CUDA Cores**                           | **Tensor Cores**                                            |
+| -------------- | ---------------------------------------- | ----------------------------------------------------------- |
+| Purpose        | General-purpose scalar/vector math       | Matrix math acceleration (GEMM: General Matrix Multiply)    |
+| Operations     | FP32, INT, logic (add, mul, AND, etc.)   | Fused matrix-multiply-accumulate (e.g., A×B+C)              |
+| Precision      | FP32, INT32                              | FP16, FP8, BF16, INT8, TF32 (mixed precision)               |
+| Speed (AI ops) | Slower for matrix ops                    | 2–8× faster for LLM workloads                               |
+| Used for       | Game physics, graphics shading, logic    | Neural networks (training/inference), LLM matrix ops        |
+| Hardware       | Simple ALUs (1 instruction/clock/thread) | Specialized matrix ALUs (process **tiles** of data at once) |
+
+---
+
+### 4. How They Work Together (LLM Workloads)
+
+For a typical **LLM workload**:
+- **Tensor Cores** handle heavy matrix multiplications (e.g., attention layers)
+- **CUDA Cores** handle:
+  - Indexing
+  - Softmax normalization
+  - Activation functions
+  - Looping and control flow
+
+---
+
+## Hopper Architecture (H100 Example)
+
+### SM Composition:
+Each SM contains:
+- **64 CUDA cores**
+- **4 Tensor Cores (4th gen)**
+
+---
+
+### Memory Hierarchy:
+
+| Level           | Function                                                                |
+|-----------------|-------------------------------------------------------------------------|
+| **Global Memory (VRAM)** | Large, high-bandwidth memory (GDDR6/HBM), used to store model weights and activations |
+| **L2 Cache**     | Shared across all SMs (e.g., up to 96MB in H100)                        |
+| **L1 Cache / Shared Memory** | Fast per-SM memory, software-managed                        |
+| **Registers**    | Fastest memory; thread-private storage inside the SM                   |
+
+---
+
+### NVIDIA Hopper SM Layout (H100)
+
+![Nvidia Data center GPU architecture](hopper.png)
+
+| Component                          | Description |
+|-----------------------------------|-------------|
+| **Warp Scheduler**                | Schedules 32 threads/clock |
+| **Dispatch Unit**                 | Sends instructions to execution units |
+| **Register File (16,384 × 32-bit)** | Per-partition thread registers |
+| **INT32 / FP32 / FP64 Units**     | ALUs for integer and floating-point math |
+| **Tensor Core (4th Gen)**         | Handles matrix-multiply at high throughput |
+| **SFU (Special Function Unit)**   | Executes sin, cos, exp, etc. |
+| **LD/ST Units**                   | Load/Store units for memory access |
+| **256 KB L1 Data Cache / Shared Mem** | Fast on-chip data exchange |
+| **Tensor Memory Accelerator**     | Optimizes tensor feeding to cores |
+| **Tex Units**                     | Texture units (used for ML or graphics) |
+
+---
+
+### One SM Contains:
+- **64 CUDA cores (FP32 ALUs)** = 16 × 4 subpartitions
+- **4 Tensor Cores (4th Gen)** = 1 per subpartition
+
+---
+
+### Hopper (H100 Full GPU):
+- **132 SMs**
+- **16,896 CUDA cores**
+- **528 Tensor Cores**
+- **80 GB HBM3 memory with 3 TB/s bandwidth**
+- **50 MB L2 Cache**
+- **New Transformer Engine for optimized LLM inference/training**
+
+---
