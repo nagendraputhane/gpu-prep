@@ -206,7 +206,7 @@ For a typical **LLM workload**:
 
 ### SM Composition:
 Each SM contains:
-- **64 CUDA cores**
+- **128 CUDA cores**
 - **4 Tensor Cores (4th gen)**
 
 ---
@@ -242,7 +242,7 @@ Each SM contains:
 ---
 
 ### One SM Contains:
-- **64 CUDA cores (FP32 ALUs)** = 16 × 4 subpartitions
+- **128 CUDA cores (FP32 ALUs)** = It’s 64 per sub-partition × 2 = 128.
 - **4 Tensor Cores (4th Gen)** = 1 per subpartition
 
 ---
