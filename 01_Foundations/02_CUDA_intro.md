@@ -177,3 +177,147 @@ EOF
 - Use `-arch=sm_75` to ensure native code generation for Tesla T4
 
 ---
+
+# 🚀 1-D Vector Addition using CUDA
+
+## ✅ Overview
+
+We will implement vector addition using CUDA by:
+- ❌ Not using `cudaMallocManaged` (no unified memory)
+- ✅ Using `cudaMalloc`, `cudaMemcpy`
+- ✅ Writing a **parallel kernel** where **each thread adds one element**
+- ✅ Measuring execution time using `cudaEvent_t`
+- ✅ Verifying results on the CPU
+
+---
+
+## 🔢 What is Vector Addition?
+
+- A **vector** is just a 1D array of numbers.
+- Vector addition:
+  ```text
+  A[i] + B[i] = C[i]
+  ```
+
+---
+
+## 🧵 One Thread per Element
+
+Instead of using a loop, we assign:
+> 🧠 "One thread to handle one index."
+
+This replaces a loop like:
+```cpp
+for (int i = 0; i < N; ++i)
+    C[i] = A[i] + B[i];
+```
+
+With a **GPU kernel**:
+```cpp
+C[thread_id] = A[thread_id] + B[thread_id];
+```
+
+---
+
+## 🧩 Grid Sizing
+
+CUDA launches threads in groups:
+
+- `kernel<<<blocks, threads_per_block>>>(...)`
+- `threads_per_block` → number of threads per block
+- `blocks` → number of blocks
+- `Grid: all the blocks together`
+
+### 🔁 Safe formula to compute blocks:
+
+```cpp
+int blocks = (N + threads - 1) / threads;
+```
+
+### ✅ Example:
+
+- N = 1000, threads = 256  
+- blocks = (1000 + 255) / 256 = 5  
+- Total threads = 5 × 256 = 1280  
+- Threads with `tid >= N` do nothing (`if (tid < N)`)
+
+---
+
+## 🧠 Bitwise Left Shift
+
+```cpp
+1 << 20
+```
+
+- Means `2^20 = 1,048,576`
+- It shifts `1` left by 20 bits. 
+- general rule of thumb: 1 << n  ==  2^n
+- Used to represent 1 million elements
+
+---
+
+## 💻 Full Code
+
+```cpp
+#include <cstdio>
+#include <cuda_runtime.h>
+
+__global__ void vector_add(const float *a, const float *b, float *c, int n) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid < n) {
+    c[tid] = a[tid] + b[tid];
+  }
+}
+
+int main() {
+  const int N = 1 << 20; // 2^20 = 1,048,576
+  size_t size = N * sizeof(float);
+
+  // Allocate CPU Memory
+  float *h_a = (float*)malloc(size);
+  float *h_b = (float*)malloc(size);
+  float *h_c = (float*)malloc(size);
+
+  // Initialize host arrays
+  for (int i = 0; i < N; i++) {
+    h_a[i] = 1.0f;
+    h_b[i] = 2.0f;
+  }
+
+  // Allocate GPU Memory
+  float *d_a, *d_b, *d_c;
+  cudaMalloc(&d_a, size);
+  cudaMalloc(&d_b, size);
+  cudaMalloc(&d_c, size);
+
+  // Copy inputs to GPU
+  cudaMemcpy(d_a, h_a, size, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_b, h_b, size, cudaMemcpyHostToDevice);
+
+  // Launch kernel
+  int threads = 256;
+  int blocks = (N + threads -1) / threads;
+  vector_add<<<blocks, threads>>>(d_a, d_b, d_c, N);
+
+  // Copy output back to host
+  cudaMemcpy(h_c, d_c, size, cudaMemcpyDeviceToHost);
+
+  // Verify result
+  bool pass = true;
+  for (int i = 0; i < N; ++i) {
+      if (fabs(h_c[i] - 3.0f) > 1e-5f) {
+          printf("Error at %d: %f\n", i, h_c[i]);
+          pass = false;
+          break;
+      }
+  }
+  printf("Vector addition: %s\n", pass ? "PASS" : "FAIL");
+
+  // Cleanup
+  free(h_a); free(h_b); free(h_c);
+  cudaFree(d_a); cudaFree(d_b); cudaFree(d_c);
+  return 0;
+}
+```
+
+---
